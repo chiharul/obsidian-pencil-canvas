@@ -1,0 +1,18 @@
+{
+  "name": "applepencilsync",
+  "version": "1.1.0",
+  "private": true,
+  "description": "Pencil Canvas - unlimited vector drawing canvas for Obsidian",
+  "scripts": {
+    "build": "node esbuild.config.cjs",
+    "check": "tsc --noEmit -p tsconfig.json"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0",
+    "obsidian": "latest",
+    "typescript": "^5.6.0"
+  },
+  "dependencies": {
+    "fflate": "^0.8.2"
+  }
+}

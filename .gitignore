@@ -1,0 +1,14 @@
+# Personal plugin settings (written by Obsidian)
+data.json
+
+# Dependencies and build tooling
+node_modules/
+package-lock.json
+
+# Built output is attached to GitHub releases instead of committed
+main.js
+
+# OS / editor junk
+.DS_Store
+Thumbs.db
+*.log
