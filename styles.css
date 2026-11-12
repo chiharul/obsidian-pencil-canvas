@@ -345,3 +345,30 @@
 .pc-diag-help { color: var(--text-muted); margin: 4px 0 8px; }
 .pc-diag-log { font-family: var(--font-monospace); color: var(--text-normal); white-space: nowrap; overflow: hidden; }
 .pc-rot svg, .pc-sel-del svg { transform: rotate(var(--pc-r, 0rad)); }
+
+/* Obsidian's mobile theme gives every <button> wide padding and a fixed height,
+   which squeezed the toolbar icons to zero width. Pin our own sizes. */
+.pc-root .pc-toolbar button.pc-btn,
+.pc-root .pc-popover button.pc-btn {
+  width: 34px;
+  min-width: 34px;
+  height: 34px;
+  padding: 0 !important;
+  flex: none;
+}
+.pc-root .pc-btn svg { flex: none; width: 18px; height: 18px; }
+.pc-root .pc-toolbar button.pc-pill { height: 30px; padding: 0 10px !important; }
+.pc-root .pc-popover button.pc-color { width: 34px; min-width: 34px; height: 34px; padding: 0 !important; }
+.is-mobile .pc-root .pc-toolbar button.pc-btn { width: 40px; min-width: 40px; height: 40px; }
+.is-mobile .pc-root .pc-btn svg { width: 20px; height: 20px; }
+.is-mobile .pc-root .pc-toolbar button.pc-pill { height: 34px; }
+
+/* centre the toolbar without halving the width it may use before wrapping */
+.pc-root .pc-toolbar {
+  left: 8px;
+  right: 8px;
+  margin: 0 auto;
+  width: fit-content;
+  max-width: calc(100% - 16px);
+  transform: none;
+}
