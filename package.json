@@ -1,6 +1,6 @@
 {
   "name": "applepencilsync",
-  "version": "1.1.2",
+  "version": "1.1.3",
   "private": true,
   "description": "Pencil Canvas - unlimited vector drawing canvas for Obsidian",
   "scripts": {

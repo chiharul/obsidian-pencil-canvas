@@ -82,7 +82,7 @@ export interface DrawingFile {
 }
 
 export interface Settings {
-  pen: { size: number; color: string; opacity: number; brush: string };
+  pen: { size: number; color: string; opacity: number; brush: string; smoothing: number };
   highlighter: { size: number; color: string };
   eraser: { size: number; mode: "stroke" | "partial" };
   fingerDraw: boolean;

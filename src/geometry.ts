@@ -27,6 +27,11 @@ export interface Geo {
   samples: Float64Array;
   bbox: BBox;
   path?: Path2D;
+  /** centre line only, used to keep hair-thin strokes solid */
+  line?: Path2D;
+  /** thinnest and average radius along the stroke */
+  minR: number;
+  meanR: number;
   /** x, y, size, rotation, alpha per stamp */
   stamps?: Float32Array;
 }
@@ -225,7 +230,25 @@ export function strokeBBox(st: Stroke, b: Brush): BBox {
 }
 
 export function makeGeo(st: Stroke, b: Brush): Geo {
-  return { samples: sampleStroke(st, b), bbox: strokeBBox(st, b) };
+  const samples = sampleStroke(st, b);
+  let minR = Infinity, sum = 0;
+  const m = samples.length / 4;
+  for (let i = 0; i < m; i++) {
+    const r = samples[i * 4 + 2];
+    if (r < minR) minR = r;
+    sum += r;
+  }
+  return { samples, bbox: strokeBBox(st, b), minR: m ? minR : 0, meanR: m ? sum / m : 0 };
+}
+
+export function buildLine(S: Float64Array): Path2D {
+  const path = new Path2D();
+  const m = S.length / 4;
+  if (!m) return path;
+  path.moveTo(S[0], S[1]);
+  if (m === 1) path.lineTo(S[0], S[1]);
+  for (let i = 1; i < m; i++) path.lineTo(S[i * 4], S[i * 4 + 1]);
+  return path;
 }
 
 // ---------------------------------------------------------------- eraser

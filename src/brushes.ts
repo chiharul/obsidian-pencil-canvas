@@ -1,5 +1,5 @@
 import { Brush, Stroke } from "./types";
-import { Geo, HL_BRUSH, buildPath, buildStamps, makeGeo } from "./geometry";
+import { Geo, HL_BRUSH, buildLine, buildPath, buildStamps, makeGeo } from "./geometry";
 
 const base: Omit<Brush, "id" | "name"> = {
   source: "builtin",
@@ -224,10 +224,32 @@ export class BrushLibrary {
         }
       }
     } else {
-      if (!g.path) g.path = buildPath(g.samples);
-      ctx.globalAlpha = tip ? Math.min(1, st.o * Math.min(1, b.opacity * 2.5)) : st.o;
-      ctx.fillStyle = st.c;
-      ctx.fill(g.path);
+      const alpha = tip ? Math.min(1, st.o * Math.min(1, b.opacity * 2.5)) : st.o;
+      // Parts of a stroke thinner than a screen pixel rasterise as a broken, speckled
+      // line. Back them with a 1-pixel-wide centre line so the stroke stays solid.
+      const hair = 1.15 / scale;
+      const thin = g.minR * 2 < hair;
+      if (thin) {
+        if (!g.line) g.line = buildLine(g.samples);
+        ctx.lineCap = "round";
+        ctx.lineJoin = "round";
+        ctx.strokeStyle = st.c;
+      }
+      if (thin && g.meanR * 2 < hair * 1.6) {
+        // the whole stroke is hair-thin: one clean line, faded instead of narrowed
+        ctx.lineWidth = Math.max(g.meanR * 2, hair);
+        ctx.globalAlpha = alpha * Math.max(0.3, Math.min(1, (g.meanR * 2) / hair));
+        ctx.stroke(g.line!);
+      } else {
+        ctx.globalAlpha = alpha;
+        if (thin && alpha >= 0.99) {
+          ctx.lineWidth = hair;
+          ctx.stroke(g.line!);
+        }
+        if (!g.path) g.path = buildPath(g.samples);
+        ctx.fillStyle = st.c;
+        ctx.fill(g.path);
+      }
     }
     ctx.globalAlpha = 1;
   }

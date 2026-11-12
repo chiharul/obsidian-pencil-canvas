@@ -563,7 +563,7 @@ export class DrawView extends TextFileView {
       id: e.pointerId,
       ptype: e.pointerType,
       st,
-      smooth: hl ? 0.35 : brush!.streamline,
+      smooth: Math.min(0.97, (hl ? 0.35 : brush!.streamline) + (s.pen.smoothing || 0)),
       dec: Math.max(1, Math.min(7, Math.ceil(Math.log10(z)) + 2)),
       lx: 0,
       ly: 0,
@@ -1310,6 +1310,18 @@ export class DrawView extends TextFileView {
     opIn.addEventListener("input", () => {
       s.pen.opacity = parseInt(opIn.value) / 100;
       opLabel.setText(opIn.value + "%");
+      this.plugin.saveSettings();
+    });
+    const sm = pop.createDiv("pc-row");
+    sm.createSpan({ text: "Smoothing" });
+    const smIn = sm.createEl("input", { type: "range", cls: "pc-slider" });
+    smIn.min = "0";
+    smIn.max = "80";
+    smIn.value = String(Math.round((s.pen.smoothing || 0) * 100));
+    const smLabel = sm.createSpan({ cls: "pc-size-label", text: smIn.value + "%" });
+    smIn.addEventListener("input", () => {
+      s.pen.smoothing = parseInt(smIn.value) / 100;
+      smLabel.setText(smIn.value + "%");
       this.plugin.saveSettings();
     });
     const list = pop.createDiv("pc-brushes");

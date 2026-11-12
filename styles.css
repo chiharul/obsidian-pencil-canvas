@@ -372,3 +372,5 @@
   max-width: calc(100% - 16px);
   transform: none;
 }
+.pc-row + .pc-row { margin-top: 0; }
+.pc-row > span:first-child { min-width: 74px; }

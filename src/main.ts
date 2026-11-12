@@ -7,7 +7,7 @@ import { DrawView, FILE_EXT, VIEW_TYPE } from "./view";
 function defaults(): Settings {
   const dark = document.body.classList.contains("theme-dark");
   return {
-    pen: { size: 4, color: dark ? "#ffffff" : "#1e1e1e", opacity: 1, brush: "ink" },
+    pen: { size: 4, color: dark ? "#ffffff" : "#1e1e1e", opacity: 1, brush: "ink", smoothing: 0 },
     highlighter: { size: 24, color: "#ffe066" },
     eraser: { size: 28, mode: "partial" },
     fingerDraw: false,
