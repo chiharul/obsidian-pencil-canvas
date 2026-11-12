@@ -11,6 +11,7 @@ function defaults(): Settings {
     highlighter: { size: 24, color: "#ffe066" },
     eraser: { size: 28, mode: "partial" },
     fingerDraw: false,
+    fixedSize: true,
     dots: true,
     brushes: [],
   };
@@ -154,6 +155,15 @@ class SettingsTab extends PluginSettingTab {
           s.eraser.mode = v ? "stroke" : "partial";
           this.plugin.saveSettings();
           this.plugin.eachView((view) => view.syncToolbar());
+        })
+      );
+    new Setting(containerEl)
+      .setName("Keep pen size fixed on the canvas")
+      .setDesc("On: a size-4 line is the same thickness as every other size-4 line, however far you are zoomed in. Off: the line is always that many pixels on screen, so zooming in draws finer lines.")
+      .addToggle((t) =>
+        t.setValue(s.fixedSize).onChange((v) => {
+          s.fixedSize = v;
+          this.plugin.saveSettings();
         })
       );
     new Setting(containerEl).setName("Dotted background").addToggle((t) =>

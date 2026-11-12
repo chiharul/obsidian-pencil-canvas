@@ -86,6 +86,8 @@ export interface Settings {
   highlighter: { size: number; color: string };
   eraser: { size: number; mode: "stroke" | "partial" };
   fingerDraw: boolean;
+  /** true: pen / highlighter width is fixed on the canvas; false: fixed on screen (thinner lines when zoomed in) */
+  fixedSize: boolean;
   dots: boolean;
   brushes: Brush[];
 }

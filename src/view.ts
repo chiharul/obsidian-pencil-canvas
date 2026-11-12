@@ -552,11 +552,12 @@ export class DrawView extends TextFileView {
       return;
     }
     const z = this.cam.zoom;
+    const k = s.fixedSize ? 1 : 1 / z; // slider size → canvas units
     const hl = this.tool === "highlighter";
     const brush = hl ? null : this.plugin.lib.get(s.pen.brush);
     const st: Stroke = hl
-      ? { t: "h", b: "", c: s.highlighter.color, s: s.highlighter.size / z, o: 0.4, p: [], r: (Math.random() * 1e9) | 0 }
-      : { t: "p", b: brush!.id, c: s.pen.color, s: s.pen.size / z, o: s.pen.opacity, p: [], r: (Math.random() * 1e9) | 0 };
+      ? { t: "h", b: "", c: s.highlighter.color, s: s.highlighter.size * k, o: 0.4, p: [], r: (Math.random() * 1e9) | 0 }
+      : { t: "p", b: brush!.id, c: s.pen.color, s: s.pen.size * k, o: s.pen.opacity, p: [], r: (Math.random() * 1e9) | 0 };
     this.act = {
       kind: "stroke",
       id: e.pointerId,
@@ -856,7 +857,8 @@ export class DrawView extends TextFileView {
 
   private showCursor(pos: { x: number; y: number }, tool: Tool) {
     const s = this.plugin.settings;
-    const d = Math.max(4, tool === "eraser" ? s.eraser.size : tool === "highlighter" ? s.highlighter.size : s.pen.size);
+    const k = s.fixedSize ? this.cam.zoom : 1; // the ring shows the real width at this zoom
+    const d = Math.max(4, tool === "eraser" ? s.eraser.size : (tool === "highlighter" ? s.highlighter.size : s.pen.size) * k);
     const c = this.cursorEl;
     c.style.width = c.style.height = d + "px";
     c.style.transform = `translate(${pos.x - d / 2}px, ${pos.y - d / 2}px)`;
@@ -1361,6 +1363,12 @@ export class DrawView extends TextFileView {
     menu.addItem((i) =>
       i.setTitle("Draw with finger").setIcon("hand").setChecked(s.fingerDraw).onClick(() => {
         s.fingerDraw = !s.fingerDraw;
+        this.plugin.saveSettings();
+      })
+    );
+    menu.addItem((i) =>
+      i.setTitle("Pen size fixed on canvas").setIcon("ruler").setChecked(s.fixedSize).onClick(() => {
+        s.fixedSize = !s.fixedSize;
         this.plugin.saveSettings();
       })
     );
