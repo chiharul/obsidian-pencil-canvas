@@ -11,6 +11,8 @@ function defaults(): Settings {
     highlighter: { size: 24, color: "#ffe066" },
     eraser: { size: 28, mode: "partial" },
     fingerDraw: false,
+    holdStraight: true,
+    ruler: { on: false, angle: 0, follow: true },
     fixedSize: true,
     dots: true,
     brushes: [],
@@ -31,6 +33,7 @@ export default class PencilCanvasPlugin extends Plugin {
       pen: { ...d.pen, ...saved.pen },
       highlighter: { ...d.highlighter, ...saved.highlighter },
       eraser: { ...d.eraser, ...saved.eraser },
+      ruler: { ...d.ruler, ...saved.ruler },
       brushes: Array.isArray(saved.brushes) ? saved.brushes : [],
     };
     this.lib.setUser(this.settings.brushes.slice());
@@ -155,6 +158,15 @@ class SettingsTab extends PluginSettingTab {
           s.eraser.mode = v ? "stroke" : "partial";
           this.plugin.saveSettings();
           this.plugin.eachView((view) => view.syncToolbar());
+        })
+      );
+    new Setting(containerEl)
+      .setName("Hold to straighten")
+      .setDesc("Keep the pen still at the end of a stroke for a moment and it snaps into a straight line that follows the pen until you lift it.")
+      .addToggle((t) =>
+        t.setValue(s.holdStraight).onChange((v) => {
+          s.holdStraight = v;
+          this.plugin.saveSettings();
         })
       );
     new Setting(containerEl)

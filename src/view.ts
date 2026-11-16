@@ -15,6 +15,8 @@ const SLOW_MS = 12;
 
 type Handle = "move" | "rot" | "nw" | "ne" | "se" | "sw";
 const HOLD_MS = 450;
+const STRAIGHT_MS = 550;
+const RULER_HALF = 36; // half the ruler's thickness, in screen pixels
 
 interface Snap {
   s: Stroke[];
@@ -22,7 +24,17 @@ interface Snap {
 }
 
 interface Act {
-  kind: "stroke" | "erase" | "pan" | "img";
+  kind: "stroke" | "erase" | "pan" | "img" | "ruler";
+  // straight line (after a hold, or when following the ruler)
+  straight?: boolean;
+  x0?: number;
+  y0?: number;
+  /** unit direction the line is locked to (ruler follow) */
+  ux?: number;
+  uy?: number;
+  /** screen position the pen is resting at, for hold detection */
+  hx?: number;
+  hy?: number;
   // image move / resize / rotate
   mode?: Handle;
   img0?: Img;
@@ -62,6 +74,9 @@ export class DrawView extends TextFileView {
   private selEl!: HTMLElement;
   private imgCache = new Map<string, HTMLImageElement>();
   private holdTimer = 0;
+  private straightTimer = 0;
+  private rulerEl!: HTMLElement;
+  private rulerPos: { x: number; y: number } | null = null;
   private clickImg: { id: string; x: number; y: number } | null = null;
   private imgInput!: HTMLInputElement;
   private diagEl: HTMLElement | null = null;
@@ -233,6 +248,8 @@ export class DrawView extends TextFileView {
     this.lctx = this.live.getContext("2d")!;
     this.cursorEl = this.stage.createDiv("pc-cursor");
     this.buildSelection();
+    this.rulerEl = this.stage.createDiv("pc-ruler");
+    this.rulerEl.createDiv("pc-ruler-label");
     this.buildToolbar(root);
 
     const st = this.stage;
@@ -274,6 +291,7 @@ export class DrawView extends TextFileView {
     this.plugin.lib.listeners.delete(this.libListener);
     window.clearTimeout(this.previewTimer);
     window.clearTimeout(this.holdTimer);
+    window.clearTimeout(this.straightTimer);
     this.diagOff?.();
   }
 
@@ -289,6 +307,7 @@ export class DrawView extends TextFileView {
     }
     this.centerIfNeeded();
     this.preview = false;
+    this.updateRuler();
     this.render();
   }
 
@@ -496,6 +515,12 @@ export class DrawView extends TextFileView {
           this.startImgAct(e.pointerId, "touch", h, pos);
           return;
         }
+        if (this.rulerHit(pos)) {
+          // a finger on the ruler slides it around
+          this.gest.moved = true;
+          this.act = { kind: "ruler", id: e.pointerId, ptype: "touch", lx: pos.x, ly: pos.y };
+          return;
+        }
         // moving an image needs a long hold; a quick drag still pans the canvas
         const w = this.toWorld(pos.x, pos.y);
         const im = this.imgAt(w.x, w.y);
@@ -516,6 +541,11 @@ export class DrawView extends TextFileView {
         return;
       }
       if (e.button !== 0) return;
+      if (this.rulerHit(pos)) {
+        this.act = { kind: "ruler", id: e.pointerId, ptype: "mouse", lx: pos.x, ly: pos.y };
+        this.stage.addClass("is-moving");
+        return;
+      }
       // mouse: click an image to select it, then drag it or its handles
       const w = this.toWorld(pos.x, pos.y);
       const hit = this.imgAt(w.x, w.y);
@@ -552,6 +582,24 @@ export class DrawView extends TextFileView {
       return;
     }
     const z = this.cam.zoom;
+    let follow: { ux: number; uy: number } | null = null;
+    if (s.ruler.on && s.ruler.follow) {
+      // every stroke is a straight line parallel to the ruler; starting next to an
+      // edge of the ruler pulls the line onto that edge
+      const rad = (s.ruler.angle * Math.PI) / 180;
+      follow = { ux: Math.cos(rad), uy: -Math.sin(rad) };
+      const rp = this.rulerCentre();
+      const nx = Math.sin(rad), ny = Math.cos(rad);
+      const d = (pos.x - rp.x) * nx + (pos.y - rp.y) * ny;
+      for (const edge of [RULER_HALF, -RULER_HALF]) {
+        if (Math.abs(d - edge) < 22) {
+          const snapped = this.toWorld(pos.x + (edge - d) * nx, pos.y + (edge - d) * ny);
+          w.x = snapped.x;
+          w.y = snapped.y;
+          break;
+        }
+      }
+    }
     const k = s.fixedSize ? 1 : 1 / z; // slider size → canvas units
     const hl = this.tool === "highlighter";
     const brush = hl ? null : this.plugin.lib.get(s.pen.brush);
@@ -567,14 +615,64 @@ export class DrawView extends TextFileView {
       dec: Math.max(1, Math.min(7, Math.ceil(Math.log10(z)) + 2)),
       lx: 0,
       ly: 0,
+      x0: w.x,
+      y0: w.y,
     };
-    this.addPoint(this.act, w.x, w.y, this.pressure(e));
+    if (follow) {
+      this.act.straight = true;
+      this.act.ux = follow.ux;
+      this.act.uy = follow.uy;
+      this.straightTo(this.act, w.x, w.y);
+    } else {
+      this.addPoint(this.act, w.x, w.y, this.pressure(e));
+      this.armStraight(pos);
+    }
     this.requestLive();
   }
 
   private pressure(e: PointerEvent) {
     if (e.pointerType !== "pen") return 0.5;
     return e.pressure > 0 ? Math.min(1, e.pressure) : 0.5;
+  }
+
+  /** (Re)start the "pen is resting" timer that turns the stroke into a straight line. */
+  private armStraight(pos: { x: number; y: number }) {
+    const a = this.act;
+    window.clearTimeout(this.straightTimer);
+    if (!a || a.kind !== "stroke" || a.straight || !this.plugin.settings.holdStraight) return;
+    a.hx = pos.x;
+    a.hy = pos.y;
+    this.straightTimer = window.setTimeout(() => {
+      const b = this.act;
+      if (!b || b !== a || b.kind !== "stroke" || b.straight || b.rawX === undefined) return;
+      // needs some length, otherwise a slow dot or a pause while writing would trigger it
+      if (Math.hypot(b.rawX - b.x0!, b.rawY! - b.y0!) * this.cam.zoom < 16) return;
+      b.straight = true;
+      this.straightTo(b, b.rawX, b.rawY!);
+      this.requestLive();
+    }, STRAIGHT_MS);
+  }
+
+  /** Replace the stroke with a straight line from its start to (wx, wy). */
+  private straightTo(a: Act, wx: number, wy: number) {
+    const x0 = a.x0!, y0 = a.y0!;
+    let ex = wx, ey = wy;
+    if (a.ux !== undefined) {
+      const d = (wx - x0) * a.ux + (wy - y0) * a.uy!;
+      ex = x0 + a.ux * d;
+      ey = y0 + a.uy! * d;
+    }
+    const q = Math.pow(10, a.dec!);
+    const r = (v: number) => Math.round(v * q) / q;
+    const n = Math.max(1, Math.min(400, Math.ceil((Math.hypot(ex - x0, ey - y0) * this.cam.zoom) / 6)));
+    const p: number[] = [];
+    for (let i = 0; i <= n; i++) {
+      const t = i / n;
+      p.push(r(x0 + (ex - x0) * t), r(y0 + (ey - y0) * t), 0.5); // even pressure → even width
+    }
+    a.st!.p = p;
+    a.rawX = ex;
+    a.rawY = ey;
   }
 
   private addPoint(a: Act, wx: number, wy: number, p: number, force = false) {
@@ -613,6 +711,17 @@ export class DrawView extends TextFileView {
         this.imgMove(a, pos);
         return;
       }
+      if (a.kind === "ruler") {
+        const rp = this.rulerCentre();
+        this.rulerPos = {
+          x: Math.max(0, Math.min(this.w, rp.x + pos.x - a.lx)),
+          y: Math.max(0, Math.min(this.h, rp.y + pos.y - a.ly)),
+        };
+        a.lx = pos.x;
+        a.ly = pos.y;
+        this.updateRuler();
+        return;
+      }
       let evs: PointerEvent[] = [];
       try {
         evs = e.getCoalescedEvents ? e.getCoalescedEvents() : [];
@@ -624,9 +733,14 @@ export class DrawView extends TextFileView {
         const lp = this.local(ce);
         const w = this.toWorld(lp.x, lp.y);
         if (a.kind === "erase") this.erase(w.x, w.y);
+        else if (a.straight) this.straightTo(a, w.x, w.y);
         else this.addPoint(a, w.x, w.y, this.pressure(ce));
       }
-      if (a.kind === "stroke") this.requestLive();
+      if (a.kind === "stroke") {
+        this.requestLive();
+        // moving more than a few pixels means the pen is not resting yet
+        if (!a.straight && (a.hx === undefined || Math.hypot(pos.x - a.hx, pos.y - a.hy!) > 4)) this.armStraight(pos);
+      }
       if (e.pointerType === "touch") {
         const t = this.touches.get(e.pointerId);
         if (t) {
@@ -741,11 +855,13 @@ export class DrawView extends TextFileView {
     if (!a) return;
     this.act = null;
     this.stage.removeClass("is-panning");
+    window.clearTimeout(this.straightTimer);
+    if (a.kind === "ruler") this.stage.removeClass("is-moving");
     if (a.kind === "stroke") {
       const st = a.st!;
       if (!cancelled && st.p.length >= 3) {
         // let the smoothed line catch up with where the pen actually ended
-        if (a.smooth! > 0 && a.rawX !== undefined) this.addPoint(a, a.rawX, a.rawY!, a.sp!, true);
+        if (!a.straight && a.smooth! > 0 && a.rawX !== undefined) this.addPoint(a, a.rawX, a.rawY!, a.sp!, true);
         this.commit(this.strokes.concat(st));
         if (this.preview) this.render();
         else {
@@ -787,8 +903,49 @@ export class DrawView extends TextFileView {
       }
     }
     this.act = null;
+    window.clearTimeout(this.straightTimer);
     this.stage.removeClass("is-panning");
+    if (a.kind === "ruler") this.stage.removeClass("is-moving");
     this.requestLive();
+  }
+
+  // ------------------------------------------------------------- ruler
+
+  private rulerCentre() {
+    return this.rulerPos ?? { x: this.w / 2, y: this.h / 2 };
+  }
+
+  private rulerHit(pos: { x: number; y: number }) {
+    const r = this.plugin.settings.ruler;
+    if (!r.on) return false;
+    const rad = (r.angle * Math.PI) / 180;
+    const c = this.rulerCentre();
+    return Math.abs((pos.x - c.x) * Math.sin(rad) + (pos.y - c.y) * Math.cos(rad)) <= RULER_HALF;
+  }
+
+  updateRuler() {
+    const el = this.rulerEl;
+    if (!el) return;
+    const r = this.plugin.settings.ruler;
+    el.toggleClass("is-visible", r.on);
+    this.ui.ruler?.toggleClass("is-active", r.on);
+    if (!r.on) return;
+    const c = this.rulerCentre();
+    el.style.transform = `translate(${c.x - 2000}px, ${c.y - RULER_HALF}px) rotate(${-r.angle}deg)`;
+    const label = el.firstElementChild as HTMLElement;
+    label.setText(`${+r.angle.toFixed(1)}°${r.follow ? " · following" : ""}`);
+    label.style.transform = `translate(-50%, -50%) rotate(${r.angle}deg)`;
+  }
+
+  private setRuler(change: Partial<{ on: boolean; angle: number; follow: boolean }>) {
+    const r = this.plugin.settings.ruler;
+    if (change.angle !== undefined) {
+      if (!isFinite(change.angle)) return;
+      change.angle = ((change.angle % 360) + 360) % 360;
+    }
+    Object.assign(r, change);
+    this.plugin.saveSettings();
+    this.plugin.eachView((v) => v.updateRuler());
   }
 
   private erase(wx: number, wy: number) {
@@ -1178,6 +1335,7 @@ export class DrawView extends TextFileView {
     color.empty();
     this.ui.swatch = color.createDiv("pc-swatch");
     btn("brush", "brush", "Brushes", () => this.openPopover("brush"));
+    btn("ruler", "ruler", "Ruler", () => this.openPopover("ruler"));
     btn("image", "image-plus", "Insert image", (e) => {
       const menu = new Menu();
       menu.addItem((i) => i.setTitle("From files / photos…").setIcon("image").onClick(() => this.imgInput.click()));
@@ -1261,7 +1419,7 @@ export class DrawView extends TextFileView {
     this.popoverKind = "";
   }
 
-  private openPopover(kind: "color" | "brush", keepOpen = false) {
+  private openPopover(kind: "color" | "brush" | "ruler", keepOpen = false) {
     const wasOpen = this.popoverKind === kind;
     this.closePopover();
     if (wasOpen && !keepOpen) return;
@@ -1293,6 +1451,50 @@ export class DrawView extends TextFileView {
       const inp = custom.createEl("input", { type: "color" });
       inp.value = /^#[0-9a-f]{6}$/i.test(target.color) ? target.color : "#000000";
       inp.addEventListener("input", () => pick(inp.value));
+      return;
+    }
+    if (kind === "ruler") {
+      const r = s.ruler;
+      const row = (label: string) => {
+        const el = pop.createDiv("pc-row pc-row-wide");
+        el.createSpan({ text: label });
+        return el;
+      };
+      const show = row("Show ruler").createEl("input", { type: "checkbox" });
+      show.checked = r.on;
+      const snap = row("Angle").createEl("select", { cls: "dropdown" });
+      for (let a = 0; a < 180; a += 15) snap.createEl("option", { text: a + "°", value: String(a) });
+      const custom = snap.createEl("option", { text: "Custom", value: "custom" });
+      const manualRow = row("Exact angle");
+      const manual = manualRow.createEl("input", { type: "number", cls: "pc-num" });
+      manual.min = "0";
+      manual.max = "360";
+      manual.step = "0.5";
+      manualRow.createSpan({ cls: "pc-size-label", text: "°" });
+      const mode = row("Lines").createEl("select", { cls: "dropdown" });
+      mode.createEl("option", { text: "Follow the ruler", value: "1" });
+      mode.createEl("option", { text: "Don't follow the ruler", value: "0" });
+      pop.createDiv({ cls: "pc-hint", text: "Drag the ruler with a finger (or the mouse) to move it. When lines follow the ruler they are drawn straight at its angle; start next to an edge to draw along it." });
+      const sync = () => {
+        show.checked = r.on;
+        const isSnap = r.angle % 15 === 0 && r.angle < 180;
+        custom.hidden = isSnap;
+        snap.value = isSnap ? String(r.angle) : "custom";
+        if (document.activeElement !== manual) manual.value = String(+r.angle.toFixed(1));
+        mode.value = r.follow ? "1" : "0";
+      };
+      sync();
+      show.addEventListener("change", () => (this.setRuler({ on: show.checked }), sync()));
+      snap.addEventListener("change", () => {
+        if (snap.value !== "custom") this.setRuler({ angle: parseFloat(snap.value), on: true });
+        sync();
+      });
+      manual.addEventListener("input", () => {
+        const v = parseFloat(manual.value);
+        if (isFinite(v)) this.setRuler({ angle: v, on: true });
+        sync();
+      });
+      mode.addEventListener("change", () => (this.setRuler({ follow: mode.value === "1" }), sync()));
       return;
     }
     // brushes
@@ -1375,6 +1577,12 @@ export class DrawView extends TextFileView {
     menu.addItem((i) =>
       i.setTitle("Draw with finger").setIcon("hand").setChecked(s.fingerDraw).onClick(() => {
         s.fingerDraw = !s.fingerDraw;
+        this.plugin.saveSettings();
+      })
+    );
+    menu.addItem((i) =>
+      i.setTitle("Hold to straighten lines").setIcon("minus").setChecked(s.holdStraight).onClick(() => {
+        s.holdStraight = !s.holdStraight;
         this.plugin.saveSettings();
       })
     );

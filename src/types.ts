@@ -86,6 +86,10 @@ export interface Settings {
   highlighter: { size: number; color: string };
   eraser: { size: number; mode: "stroke" | "partial" };
   fingerDraw: boolean;
+  /** pause at the end of a stroke to turn it into a straight line */
+  holdStraight: boolean;
+  /** angle in degrees, anticlockwise from horizontal; follow = strokes are forced parallel to the ruler */
+  ruler: { on: boolean; angle: number; follow: boolean };
   /** true: pen / highlighter width is fixed on the canvas; false: fixed on screen (thinner lines when zoomed in) */
   fixedSize: boolean;
   dots: boolean;
