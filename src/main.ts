@@ -4,6 +4,7 @@ import { importBrushFile } from "./import";
 import { Settings } from "./types";
 import { DrawView, FILE_EXT, VIEW_TYPE } from "./view";
 import { PencilEmbed } from "./embed";
+import { CanvasInk, inkPathFor } from "./annotate";
 
 function defaults(): Settings {
   const dark = document.body.classList.contains("theme-dark");
@@ -25,6 +26,7 @@ export default class PencilCanvasPlugin extends Plugin {
   settings!: Settings;
   lib = new BrushLibrary();
   private saveTimer = 0;
+  private inks = new Map<any, CanvasInk>();
 
   async onload() {
     const d = defaults();
@@ -44,6 +46,36 @@ export default class PencilCanvasPlugin extends Plugin {
     this.registerExtensions([FILE_EXT], VIEW_TYPE);
 
     this.registerEmbeds();
+    // an ink layer over every open Canvas
+    this.app.workspace.onLayoutReady(() => this.attachInk());
+    this.registerEvent(this.app.workspace.on("layout-change", () => this.attachInk()));
+    this.registerEvent(this.app.workspace.on("active-leaf-change", () => this.attachInk()));
+    this.register(() => {
+      this.inks.forEach((ink, view) => view.removeChild?.(ink));
+      this.inks.clear();
+    });
+    // annotations follow their canvas when it is renamed or moved
+    this.registerEvent(
+      this.app.vault.on("rename", (file, oldPath) => {
+        if (!(file instanceof TFile) || file.extension !== "canvas" || !/\.canvas$/i.test(oldPath)) return;
+        const ink = this.app.vault.getAbstractFileByPath(inkPathFor(oldPath));
+        const to = inkPathFor(file.path);
+        if (ink instanceof TFile && !this.app.vault.getAbstractFileByPath(to)) {
+          this.app.fileManager.renameFile(ink, to).catch((e) => console.error("Pencil Canvas: could not move the canvas annotations", e));
+        }
+      })
+    );
+    this.addCommand({
+      id: "canvas-annotate",
+      name: "Annotate this canvas (draw on it)",
+      checkCallback: (checking) => {
+        const view = this.app.workspace.getMostRecentLeaf()?.view as any;
+        const ink = view && this.inks.get(view);
+        if (!ink || view.canvas?.readonly) return false;
+        if (!checking) ink.toggleMode();
+        return true;
+      },
+    });
 
     this.addRibbonIcon("pencil", "New drawing", () => this.createDrawing());
     this.addCommand({ id: "new-drawing", name: "New drawing", callback: () => this.createDrawing() });
@@ -118,6 +150,22 @@ export default class PencilCanvasPlugin extends Plugin {
     } catch (e) {
       console.warn("Pencil Canvas: could not register the embed preview", e);
     }
+  }
+
+  private attachInk() {
+    const open = new Set<any>();
+    for (const leaf of this.app.workspace.getLeavesOfType("canvas")) {
+      const view = leaf.view as any;
+      if (!view?.canvas?.wrapperEl || typeof view.addChild !== "function") continue; // not loaded yet
+      open.add(view);
+      if (this.inks.has(view)) continue;
+      const ink = new CanvasInk(this, view);
+      this.inks.set(view, ink);
+      view.addChild(ink);
+    }
+    this.inks.forEach((_, view) => {
+      if (!open.has(view)) this.inks.delete(view); // closed: the view unloaded its ink layer itself
+    });
   }
 
   /** Open a drawing for editing, reusing a tab that already shows it. */
@@ -251,8 +299,8 @@ class SettingsTab extends PluginSettingTab {
         })
       );
     new Setting(containerEl)
-      .setName("Pencil draws on Canvas cards")
-      .setDesc("In Obsidian Canvas, the pencil draws straight onto a drawing card; move the card with a finger or by its title. Off: double-click the card (or use its menu) before drawing on it.")
+      .setName("Pencil draws in Obsidian Canvas")
+      .setDesc("The pencil draws straight onto drawing cards and onto empty parts of a canvas; fingers still pan, zoom and move cards. Off: use the Annotate button on the canvas, or double-click a drawing card, before drawing.")
       .addToggle((t) =>
         t.setValue(s.cardDraw).onChange((v) => {
           s.cardDraw = v;
