@@ -415,3 +415,103 @@
 .pc-row-wide > span:first-child { flex: 1; }
 .pc-popover .pc-num { width: 90px; }
 .pc-popover select.dropdown { max-width: 190px; }
+
+/* ---- drawings embedded in Canvas cards and notes ---- */
+.pc-embed {
+  position: relative;
+  width: 100%;
+  min-height: 60px;
+  max-height: 80vh;
+  cursor: pointer;
+}
+.pc-embed.is-card {
+  height: 100%;
+  max-height: none;
+}
+.pc-embed canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.pc-embed.is-empty canvas {
+  display: none;
+}
+.pc-embed-empty {
+  display: none;
+  position: absolute;
+  inset: 0;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-faint);
+  font-size: var(--font-ui-small);
+}
+.pc-embed.is-empty .pc-embed-empty {
+  display: flex;
+}
+.canvas-node-content.pc-embed-host {
+  padding: 0;
+}
+
+/* ---- drawing directly on a Canvas card ---- */
+.pc-embed-empty {
+  padding: 8px;
+  text-align: center;
+}
+.canvas-node.pc-card-drawing .canvas-node-container {
+  box-shadow: 0 0 0 2px var(--interactive-accent);
+  cursor: crosshair;
+  touch-action: none;
+}
+.pc-card-bar {
+  position: absolute;
+  top: calc(100% + 10px);
+  left: 50%;
+  transform: translateX(-50%);
+  transform-origin: top center;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+  border-radius: 10px;
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  box-shadow: var(--shadow-s);
+  z-index: 5;
+  pointer-events: auto;
+  white-space: nowrap;
+}
+.pc-card-btn {
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 7px;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.pc-card-btn .svg-icon {
+  width: 18px;
+  height: 18px;
+}
+.pc-card-btn:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+.pc-card-btn.is-active {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+}
+.pc-card-btn.is-disabled {
+  opacity: 0.35;
+  pointer-events: none;
+}
+.pc-card-sep {
+  width: 1px;
+  height: 20px;
+  margin: 0 3px;
+  background: var(--background-modifier-border);
+}

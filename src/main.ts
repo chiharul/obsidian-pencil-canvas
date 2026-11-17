@@ -1,8 +1,9 @@
-import { Notice, Plugin, PluginSettingTab, Setting, TFolder, App, normalizePath } from "obsidian";
+import { Notice, Plugin, PluginSettingTab, Setting, TFile, TFolder, App, normalizePath } from "obsidian";
 import { BrushLibrary } from "./brushes";
 import { importBrushFile } from "./import";
 import { Settings } from "./types";
 import { DrawView, FILE_EXT, VIEW_TYPE } from "./view";
+import { PencilEmbed } from "./embed";
 
 function defaults(): Settings {
   const dark = document.body.classList.contains("theme-dark");
@@ -12,6 +13,7 @@ function defaults(): Settings {
     eraser: { size: 28, mode: "partial" },
     fingerDraw: false,
     holdStraight: true,
+    cardDraw: true,
     ruler: { on: false, angle: 0, follow: true },
     fixedSize: true,
     dots: true,
@@ -40,6 +42,8 @@ export default class PencilCanvasPlugin extends Plugin {
 
     this.registerView(VIEW_TYPE, (leaf) => new DrawView(leaf, this));
     this.registerExtensions([FILE_EXT], VIEW_TYPE);
+
+    this.registerEmbeds();
 
     this.addRibbonIcon("pencil", "New drawing", () => this.createDrawing());
     this.addCommand({ id: "new-drawing", name: "New drawing", callback: () => this.createDrawing() });
@@ -70,7 +74,80 @@ export default class PencilCanvasPlugin extends Plugin {
         }
       })
     );
+    this.addCommand({
+      id: "canvas-add-drawing",
+      name: "Add a new drawing to this canvas",
+      checkCallback: (checking) => {
+        const cv = this.activeCanvas();
+        if (!cv) return false;
+        if (!checking) this.addDrawingToCanvas(cv);
+        return true;
+      },
+    });
+    // right-click / long-press a drawing card in Canvas → open it for editing
+    this.registerEvent(
+      (this.app.workspace as any).on("canvas:node-menu", (menu: any, node: any) => {
+        const file = node?.file;
+        if (!(file instanceof TFile) || file.extension !== FILE_EXT) return;
+        if (node.child instanceof PencilEmbed && !node.canvas?.readonly) {
+          menu.addItem((i: any) => i.setSection("open").setTitle("Draw on this card").setIcon("pencil").onClick(() => node.child.startSession()));
+        }
+        menu.addItem((i: any) => i.setSection("open").setTitle("Open drawing in a tab").setIcon("maximize-2").onClick(() => this.openDrawing(file)));
+      })
+    );
     this.addSettingTab(new SettingsTab(this.app, this));
+  }
+
+  /**
+   * Show drawings wherever Obsidian embeds a file: cards in Canvas and ![[drawing.pencil]] in notes.
+   * The embed registry is not part of the public API, so every step is guarded.
+   */
+  private registerEmbeds() {
+    const reg = (this.app as any).embedRegistry;
+    if (!reg || typeof reg.registerExtension !== "function") return;
+    try {
+      if (reg.isExtensionRegistered?.(FILE_EXT)) reg.unregisterExtension(FILE_EXT);
+      reg.registerExtension(FILE_EXT, (ctx: { containerEl: HTMLElement }, file: TFile) => new PencilEmbed(this, ctx.containerEl, file));
+      this.register(() => {
+        try {
+          reg.unregisterExtension(FILE_EXT);
+        } catch {
+          /* nothing to undo */
+        }
+      });
+    } catch (e) {
+      console.warn("Pencil Canvas: could not register the embed preview", e);
+    }
+  }
+
+  /** Open a drawing for editing, reusing a tab that already shows it. */
+  openDrawing(file: TFile) {
+    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
+      if (leaf.view instanceof DrawView && leaf.view.file === file) {
+        this.app.workspace.setActiveLeaf(leaf, { focus: true });
+        return;
+      }
+    }
+    this.app.workspace.getLeaf("tab").openFile(file);
+  }
+
+  private activeCanvas(): any {
+    const view = this.app.workspace.getMostRecentLeaf()?.view as any;
+    const cv = view?.getViewType?.() === "canvas" ? view.canvas : null;
+    return cv && !cv.readonly && typeof cv.createFileNode === "function" ? cv : null;
+  }
+
+  private async addDrawingToCanvas(cv: any) {
+    const canvasFile: TFile | undefined = cv.view?.file;
+    try {
+      const file = await this.newDrawingFile(canvasFile?.parent ?? undefined);
+      const size = { width: 480, height: 360 };
+      const x = typeof cv.x === "number" ? cv.x : 0, y = typeof cv.y === "number" ? cv.y : 0;
+      cv.createFileNode({ pos: { x: x - size.width / 2, y: y - size.height / 2 }, size, file, save: true, focus: true });
+    } catch (e) {
+      new Notice("Pencil Canvas: could not add a drawing to this canvas.");
+      console.error(e);
+    }
   }
 
   onunload() {
@@ -94,6 +171,11 @@ export default class PencilCanvasPlugin extends Plugin {
   }
 
   async createDrawing(folder?: TFolder) {
+    const file = await this.newDrawingFile(folder);
+    await this.app.workspace.getLeaf(true).openFile(file);
+  }
+
+  private async newDrawingFile(folder?: TFolder | null) {
     const parent = folder ?? this.app.fileManager.getNewFileParent(this.app.workspace.getActiveFile()?.path ?? "");
     const dir = parent.path === "/" ? "" : parent.path + "/";
     const n = new Date();
@@ -101,8 +183,7 @@ export default class PencilCanvasPlugin extends Plugin {
     const stamp = `${n.getFullYear()}-${two(n.getMonth() + 1)}-${two(n.getDate())} ${two(n.getHours())}.${two(n.getMinutes())}.${two(n.getSeconds())}`;
     let path = normalizePath(`${dir}Drawing ${stamp}.${FILE_EXT}`);
     for (let i = 2; this.app.vault.getAbstractFileByPath(path); i++) path = normalizePath(`${dir}Drawing ${stamp} ${i}.${FILE_EXT}`);
-    const file = await this.app.vault.create(path, "");
-    await this.app.workspace.getLeaf(true).openFile(file);
+    return this.app.vault.create(path, "");
   }
 
   /** Import brush files; returns the id of the first imported brush (if any). */
@@ -166,6 +247,15 @@ class SettingsTab extends PluginSettingTab {
       .addToggle((t) =>
         t.setValue(s.holdStraight).onChange((v) => {
           s.holdStraight = v;
+          this.plugin.saveSettings();
+        })
+      );
+    new Setting(containerEl)
+      .setName("Pencil draws on Canvas cards")
+      .setDesc("In Obsidian Canvas, the pencil draws straight onto a drawing card; move the card with a finger or by its title. Off: double-click the card (or use its menu) before drawing on it.")
+      .addToggle((t) =>
+        t.setValue(s.cardDraw).onChange((v) => {
+          s.cardDraw = v;
           this.plugin.saveSettings();
         })
       );

@@ -2,6 +2,7 @@ import { Menu, Notice, Scope, TextFileView, WorkspaceLeaf, arrayBufferToBase64, 
 import type PencilCanvasPlugin from "./main";
 import { Brush, DrawingFile, Img, Stroke, Tool } from "./types";
 import { cutStroke, strokeHit, svgPath } from "./geometry";
+import { drawingBounds, parseDrawing, serializeDrawing } from "./doc";
 
 export const VIEW_TYPE = "pencil-canvas";
 export const FILE_EXT = "pencil";
@@ -155,61 +156,27 @@ export class DrawView extends TextFileView {
 
   getViewData(): string {
     if (this.unreadable !== null) return this.unreadable;
-    const lib = this.plugin.lib;
-    const brushes: Record<string, Brush> = {};
-    for (const st of this.strokes) {
-      if (st.t === "p" && !lib.isBuiltin(st.b) && !brushes[st.b]) {
-        const b = lib.get(st.b);
-        if (b.id === st.b) brushes[st.b] = b;
-      }
-    }
     const r = (v: number) => Math.round(v * 1000) / 1000;
-    const doc: DrawingFile = {
-      app: "pencil-canvas",
-      version: 1,
-      view: { x: r(this.cam.x), y: r(this.cam.y), zoom: +this.cam.zoom.toPrecision(6) },
-      strokes: this.strokes,
-      images: this.images,
-      brushes,
-    };
-    return JSON.stringify(doc);
+    const view = { x: r(this.cam.x), y: r(this.cam.y), zoom: +this.cam.zoom.toPrecision(6) };
+    return serializeDrawing(this.strokes, this.images, view, this.plugin.lib);
   }
 
   setViewData(data: string, clear: boolean) {
     if (clear) this.clear();
     this.unreadable = null;
-    let doc: Partial<DrawingFile> | null = null;
-    if (data.trim()) {
-      try {
-        doc = JSON.parse(data);
-      } catch {
-        this.unreadable = data;
-        new Notice("Pencil Canvas: this file could not be read. It is left untouched.");
-      }
+    const doc = parseDrawing(data);
+    if (!doc) {
+      this.unreadable = data;
+      new Notice("Pencil Canvas: this file could not be read. It is left untouched.");
     }
-    const strokes: Stroke[] = [];
-    if (doc && Array.isArray(doc.strokes)) {
-      for (const s of doc.strokes) {
-        if (s && Array.isArray(s.p) && s.p.length >= 3 && typeof s.s === "number") {
-          strokes.push({ ...s, t: s.t === "h" ? "h" : "p", b: s.b ?? "ink", c: s.c ?? "#000", o: s.o ?? 1 });
-        }
-      }
-    }
-    if (doc?.brushes) for (const id of Object.keys(doc.brushes)) this.plugin.lib.addDoc({ ...doc.brushes[id], id });
-    this.strokes = strokes;
-    this.images = [];
-    if (doc && Array.isArray(doc.images)) {
-      for (const im of doc.images) {
-        if (im && typeof im.src === "string" && im.w > 0 && im.h > 0) {
-          this.images.push({ id: String(im.id ?? Math.random()), src: im.src, x: +im.x || 0, y: +im.y || 0, w: im.w, h: im.h, r: +im.r || 0 });
-        }
-      }
-    }
+    if (doc) for (const id of Object.keys(doc.brushes)) this.plugin.lib.addDoc({ ...doc.brushes[id], id });
+    this.strokes = doc?.strokes ?? [];
+    this.images = doc?.images ?? [];
     this.sel = null;
     this.undoStack = [];
     this.redoStack = [];
-    if (doc?.view && isFinite(doc.view.zoom) && doc.view.zoom > 0) {
-      this.cam = { x: doc.view.x || 0, y: doc.view.y || 0, zoom: doc.view.zoom };
+    if (doc?.view) {
+      this.cam = { ...doc.view };
       this.camSet = true;
     } else this.camSet = false;
     this.centerIfNeeded();
@@ -1696,24 +1663,7 @@ export class DrawView extends TextFileView {
   }
 
   private bounds(): [number, number, number, number] | null {
-    if (!this.strokes.length && !this.images.length) return null;
-    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
-    for (const im of this.images) {
-      const c = Math.abs(Math.cos(im.r)), s = Math.abs(Math.sin(im.r));
-      const hw = (im.w * c + im.h * s) / 2, hh = (im.w * s + im.h * c) / 2;
-      x0 = Math.min(x0, im.x - hw);
-      y0 = Math.min(y0, im.y - hh);
-      x1 = Math.max(x1, im.x + hw);
-      y1 = Math.max(y1, im.y + hh);
-    }
-    for (const st of this.strokes) {
-      const b = this.plugin.lib.geoOf(st).bbox;
-      x0 = Math.min(x0, b[0]);
-      y0 = Math.min(y0, b[1]);
-      x1 = Math.max(x1, b[2]);
-      y1 = Math.max(y1, b[3]);
-    }
-    return [x0, y0, x1, y1];
+    return drawingBounds(this.strokes, this.images, this.plugin.lib);
   }
 
   zoomToFit() {

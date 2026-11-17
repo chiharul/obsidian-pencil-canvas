@@ -88,6 +88,8 @@ export interface Settings {
   fingerDraw: boolean;
   /** pause at the end of a stroke to turn it into a straight line */
   holdStraight: boolean;
+  /** the pencil draws straight onto drawing cards in Obsidian Canvas */
+  cardDraw: boolean;
   /** angle in degrees, anticlockwise from horizontal; follow = strokes are forced parallel to the ruler */
   ruler: { on: boolean; angle: number; follow: boolean };
   /** true: pen / highlighter width is fixed on the canvas; false: fixed on screen (thinner lines when zoomed in) */
