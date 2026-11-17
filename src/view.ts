@@ -32,6 +32,11 @@ interface Act {
   /** unit direction the line is locked to (ruler follow) */
   ux?: number;
   uy?: number;
+  // ruler: second finger twisting it
+  id2?: number;
+  /** angle between the two fingers and the ruler's angle when the twist began */
+  tw0?: number;
+  ang0?: number;
   /** screen position the pen is resting at, for hold detection */
   hx?: number;
   hy?: number;
@@ -530,6 +535,10 @@ export class DrawView extends TextFileView {
         this.begin(e, pos);
         return;
       }
+      if (this.act && this.act.kind === "ruler" && this.act.ptype === "touch" && this.touches.size === 2) {
+        this.startTwist(this.act, e.pointerId);
+        return;
+      }
       if (this.act && this.act.ptype === "touch") this.cancelAct(); // second finger → pan / zoom instead
       return;
     }
@@ -698,6 +707,17 @@ export class DrawView extends TextFileView {
   private onMove(e: PointerEvent) {
     const pos = this.local(e);
     const a = this.act;
+    if (e.pointerType === "touch") {
+      const t = this.touches.get(e.pointerId);
+      if (t) {
+        t.x = pos.x;
+        t.y = pos.y;
+      }
+      if (a && a.kind === "ruler" && a.id2 !== undefined && (e.pointerId === a.id || e.pointerId === a.id2)) {
+        this.twist(a);
+        return;
+      }
+    }
     if (a && a.id === e.pointerId) {
       if (a.kind === "pan") {
         this.cam.x += pos.x - a.lx;
@@ -812,6 +832,21 @@ export class DrawView extends TextFileView {
     const pos = this.local(e);
     const a = this.act;
     window.clearTimeout(this.holdTimer);
+    if (a && a.kind === "ruler" && a.id2 !== undefined) {
+      if (e.pointerId === a.id2) {
+        // twisting finger lifted: the first finger goes back to sliding the ruler
+        a.id2 = undefined;
+        const t = this.touches.get(a.id);
+        if (t) {
+          a.lx = t.x;
+          a.ly = t.y;
+        }
+      } else if (e.pointerId === a.id) {
+        // first finger lifted: the one left behind must not start panning the canvas
+        const other = this.touches.get(a.id2);
+        if (other) other.palm = true;
+      }
+    }
     if (a && a.id === e.pointerId) {
       const c = this.clickImg;
       if (c && e.pointerType === "mouse" && !cancelled && Math.hypot(pos.x - c.x, pos.y - c.y) < 4) {
@@ -856,7 +891,11 @@ export class DrawView extends TextFileView {
     this.act = null;
     this.stage.removeClass("is-panning");
     window.clearTimeout(this.straightTimer);
-    if (a.kind === "ruler") this.stage.removeClass("is-moving");
+    if (a.kind === "ruler") {
+      this.stage.removeClass("is-moving");
+      this.plugin.saveSettings(); // the angle may have been twisted
+      this.plugin.eachView((v) => v.updateRuler());
+    }
     if (a.kind === "stroke") {
       const st = a.st!;
       if (!cancelled && st.p.length >= 3) {
@@ -921,6 +960,47 @@ export class DrawView extends TextFileView {
     const rad = (r.angle * Math.PI) / 180;
     const c = this.rulerCentre();
     return Math.abs((pos.x - c.x) * Math.sin(rad) + (pos.y - c.y) * Math.cos(rad)) <= RULER_HALF;
+  }
+
+  private fingerPair(a: Act) {
+    const p1 = this.touches.get(a.id), p2 = a.id2 !== undefined ? this.touches.get(a.id2) : undefined;
+    if (!p1 || !p2) return null;
+    return {
+      angle: (Math.atan2(-(p2.y - p1.y), p2.x - p1.x) * 180) / Math.PI,
+      cx: (p1.x + p2.x) / 2,
+      cy: (p1.y + p2.y) / 2,
+    };
+  }
+
+  private startTwist(a: Act, id2: number) {
+    a.id2 = id2;
+    const f = this.fingerPair(a);
+    if (!f) {
+      a.id2 = undefined;
+      return;
+    }
+    a.tw0 = f.angle;
+    a.ang0 = this.plugin.settings.ruler.angle;
+    a.lx = f.cx;
+    a.ly = f.cy;
+  }
+
+  /** Two fingers on the ruler: turning them turns the ruler, moving them moves it. */
+  private twist(a: Act) {
+    const f = this.fingerPair(a);
+    if (!f) return;
+    let ang = (((a.ang0! + f.angle - a.tw0!) % 360) + 360) % 360;
+    const snap = Math.round(ang / 15) * 15;
+    if (Math.abs(ang - snap) < 1.5) ang = snap % 360; // gently catch the 15° steps
+    this.plugin.settings.ruler.angle = Math.round(ang * 2) / 2;
+    const rp = this.rulerCentre();
+    this.rulerPos = {
+      x: Math.max(0, Math.min(this.w, rp.x + f.cx - a.lx)),
+      y: Math.max(0, Math.min(this.h, rp.y + f.cy - a.ly)),
+    };
+    a.lx = f.cx;
+    a.ly = f.cy;
+    this.updateRuler();
   }
 
   updateRuler() {
@@ -1474,7 +1554,7 @@ export class DrawView extends TextFileView {
       const mode = row("Lines").createEl("select", { cls: "dropdown" });
       mode.createEl("option", { text: "Follow the ruler", value: "1" });
       mode.createEl("option", { text: "Don't follow the ruler", value: "0" });
-      pop.createDiv({ cls: "pc-hint", text: "Drag the ruler with a finger (or the mouse) to move it. When lines follow the ruler they are drawn straight at its angle; start next to an edge to draw along it." });
+      pop.createDiv({ cls: "pc-hint", text: "Drag the ruler with a finger (or the mouse) to move it. Put a second finger down and twist to change its angle. When lines follow the ruler they are drawn straight at its angle; start next to an edge to draw along it." });
       const sync = () => {
         show.checked = r.on;
         const isSnap = r.angle % 15 === 0 && r.angle < 180;
