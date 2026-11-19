@@ -17,6 +17,8 @@ const SLOW_MS = 12;
 type Handle = "move" | "rot" | "nw" | "ne" | "se" | "sw";
 const HOLD_MS = 450;
 const STRAIGHT_MS = 550;
+/** how long to hold the ruler button before its options open */
+const RULER_HOLD_MS = 450;
 const RULER_HALF = 36; // half the ruler's thickness, in screen pixels
 
 interface Snap {
@@ -1382,7 +1384,34 @@ export class DrawView extends TextFileView {
     color.empty();
     this.ui.swatch = color.createDiv("pc-swatch");
     btn("brush", "brush", "Brushes", () => this.openPopover("brush"));
-    btn("ruler", "ruler", "Ruler", () => this.openPopover("ruler"));
+    // ruler: tap shows / hides it, hold (or right-click) opens its options
+    let held = false;
+    let holdTimer = 0;
+    const ruler = btn("ruler", "ruler", "Ruler — tap to show / hide, hold for options", () => {
+      if (held) {
+        held = false;
+        return;
+      }
+      if (this.popoverKind === "ruler") this.closePopover();
+      this.setRuler({ on: !this.plugin.settings.ruler.on });
+    });
+    const cancelHold = () => window.clearTimeout(holdTimer);
+    ruler.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0) return;
+      held = false;
+      cancelHold();
+      holdTimer = window.setTimeout(() => {
+        held = true;
+        this.openPopover("ruler", true);
+      }, RULER_HOLD_MS);
+    });
+    for (const t of ["pointerup", "pointerleave", "pointercancel"] as const) ruler.addEventListener(t, cancelHold);
+    ruler.addEventListener("contextmenu", (e) => {
+      e.preventDefault();
+      cancelHold();
+      held = false;
+      this.openPopover("ruler", true);
+    });
     btn("image", "image-plus", "Insert image", (e) => {
       const menu = new Menu();
       menu.addItem((i) => i.setTitle("From files / photos…").setIcon("image").onClick(() => this.imgInput.click()));
@@ -1507,8 +1536,6 @@ export class DrawView extends TextFileView {
         el.createSpan({ text: label });
         return el;
       };
-      const show = row("Show ruler").createEl("input", { type: "checkbox" });
-      show.checked = r.on;
       const snap = row("Angle").createEl("select", { cls: "dropdown" });
       for (let a = 0; a < 180; a += 15) snap.createEl("option", { text: a + "°", value: String(a) });
       const custom = snap.createEl("option", { text: "Custom", value: "custom" });
@@ -1521,9 +1548,8 @@ export class DrawView extends TextFileView {
       const mode = row("Lines").createEl("select", { cls: "dropdown" });
       mode.createEl("option", { text: "Follow the ruler", value: "1" });
       mode.createEl("option", { text: "Don't follow the ruler", value: "0" });
-      pop.createDiv({ cls: "pc-hint", text: "Drag the ruler with a finger (or the mouse) to move it. Put a second finger down and twist to change its angle. When lines follow the ruler they are drawn straight at its angle; start next to an edge to draw along it." });
+      pop.createDiv({ cls: "pc-hint", text: "Tap the ruler button to show or hide the ruler. Drag the ruler with a finger (or the mouse) to move it. Put a second finger down and twist to change its angle. When lines follow the ruler they are drawn straight at its angle; start next to an edge to draw along it." });
       const sync = () => {
-        show.checked = r.on;
         const isSnap = r.angle % 15 === 0 && r.angle < 180;
         custom.hidden = isSnap;
         snap.value = isSnap ? String(r.angle) : "custom";
@@ -1531,7 +1557,6 @@ export class DrawView extends TextFileView {
         mode.value = r.follow ? "1" : "0";
       };
       sync();
-      show.addEventListener("change", () => (this.setRuler({ on: show.checked }), sync()));
       snap.addEventListener("change", () => {
         if (snap.value !== "custom") this.setRuler({ angle: parseFloat(snap.value), on: true });
         sync();
